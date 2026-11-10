@@ -21,6 +21,11 @@ export async function run(
   config: Config,
   deps: RunDeps = {},
 ): Promise<ReturnType<typeof summarize>> {
+  if (config.mode === "bugs") {
+    // Bugs mode is read-only and model-free; it is orchestrated separately so
+    // it cannot accidentally inherit the write path below.
+    throw new Error("bugs mode is orchestrated by runBugTriage, not run()");
+  }
   if (config.mode === "eval") {
     if (!deps.classifier) {
       throw new Error("eval mode requires a classifier");
@@ -34,7 +39,7 @@ export async function run(
     config.teamNamePrefixes,
     config.teamField,
   );
-  const classifier = deps.classifier ?? buildClassifier(config);
+  const classifier = deps.classifier ?? buildClassifier(classifierConfig(config));
   // Audit state is the audit mode's own resource: only it loads or writes it.
   const history =
     config.mode === "audit"
@@ -105,4 +110,12 @@ async function buildLiveJiraClient(config: Config): Promise<JiraClient> {
   // Deferred import: --check and injected runs never touch the HTTP adapter.
   const { JiraCloudClient } = await import("./jira.ts");
   return new JiraCloudClient(config);
+}
+
+/** Narrow the optional backend: only bugs mode may omit the classifier block. */
+function classifierConfig(config: Config): Parameters<typeof buildClassifier>[0] {
+  if (!config.classifierConfigured) {
+    throw new Error("classifier is required outside bugs mode");
+  }
+  return config;
 }

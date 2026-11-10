@@ -14,7 +14,7 @@ const argv = cli({
   flags: {
     mode: {
       type: String,
-      description: "Run mode: triage | audit | eval",
+      description: "Run mode: triage | audit | eval | bugs",
     },
     report: {
       type: String,
@@ -64,8 +64,8 @@ export async function main(): Promise<number> {
   try {
     config = loadConfig();
     if (mode !== undefined) {
-      if (!["triage", "audit", "eval"].includes(mode)) {
-        throw new Error("--mode must be one of: triage, audit, eval");
+      if (!["triage", "audit", "eval", "bugs"].includes(mode)) {
+        throw new Error("--mode must be one of: triage, audit, eval, bugs");
       }
       config.mode = mode as Config["mode"];
     }
@@ -81,7 +81,11 @@ export async function main(): Promise<number> {
       if (config.mode !== "eval") {
         validateJiraConfig(config);
       }
-      validateConfigFiles(config);
+      // Bugs mode reads Jira and grades local assessments; it needs neither
+      // the Team/component catalogs nor a classifier.
+      if (config.mode !== "bugs") {
+        validateConfigFiles(config);
+      }
       if (config.mode === "audit") {
         // audit state loads only for the mode that owns it
         const { AuditHistory } = await import("./state.ts");
@@ -98,6 +102,13 @@ export async function main(): Promise<number> {
     log.info("DRY_RUN=true: no Jira fields will be written");
   }
   try {
+    if (config.mode === "bugs") {
+      // Bugs mode has no write path at all; it never consults DRY_RUN.
+      const { runBugTriage } = await import("./bugrun.ts");
+      const result = await runBugTriage(config);
+      console.log(redact(result.text, 100_000));
+      return 0;
+    }
     const summary = await run(config);
     console.log(redact(summaryText(summary), 100_000));
     return summary.counts.error || summary.writeErrors ? 1 : 0;

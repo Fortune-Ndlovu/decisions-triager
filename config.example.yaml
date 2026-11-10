@@ -7,7 +7,7 @@
 # Every value is validated at startup: unknown keys and wrong types abort
 # the run — a typo can never silently enable live writes.
 
-mode: triage # triage | audit | eval
+mode: triage # triage | audit | eval | bugs
 
 jira:
   # The one https origin the credential may ever be sent to. Exactly one
@@ -31,6 +31,12 @@ jql:
   audit: >-
     project in (PROJ, SUPP) AND status != closed
     AND cf[10001] is not EMPTY AND component is not EMPTY
+  # Bugs: the corpus the bugs mode samples and ranks duplicates against.
+  # Required only when mode is `bugs`. Keep customer-linked tickets out with
+  # the label filter; the selector also refuses them on its own.
+  bugs: >-
+    project = RHDHBUGS AND statusCategory != Done
+    AND created <= -90d AND labels != "RHDH-Customer"
 
 # Site-specific prefixes stripped from Jira team names before catalog
 # matching (case-insensitive). E.g. ["ACME "] makes a live "ACME Platform"
@@ -38,9 +44,11 @@ jql:
 team_name_prefixes: []
 
 classifier:
-  # Required — there is no default backend; pick one and give it an
-  # endpoint and model. Secrets (CLASSIFIER_API_KEY) go in .env, never
-  # here: the openai backend refuses to start without it.
+  # Required for triage/audit/eval — there is no default backend; pick one
+  # and give it an endpoint and model. Bugs mode may omit this whole block:
+  # it grades cited evidence and never calls a model. Secrets
+  # (CLASSIFIER_API_KEY) go in .env, never here: the openai backend refuses
+  # to start without it.
   #
   # llama: llama-server serving a System One decision model (/v1/systemone),
   #   e.g. ggml-org's d3-flash. No API key needed locally.
@@ -69,6 +77,37 @@ description_max_chars: 48000
 audit:
   recheck_days: 30
   state_file: triager-state.json
+
+# Bugs mode (`--mode bugs`). Read-only: it selects a sample, ranks duplicate
+# candidates, grades the assessments you supply, and writes local artifacts.
+# It never comments, transitions, links, or writes a field.
+bugs:
+  # The release a still-valid claim is checked against.
+  current_release: "2.1.0"
+  # Aged means at least this many days old.
+  aged_days: 90
+  # Aged tickets in the sample. 12-15 is the tested range.
+  sample_size: 12
+  # Seed for the stable hash order: same corpus + seed = same sample.
+  seed: 18094
+  # Reference date for age arithmetic. Omit for today.
+  # as_of: "2026-11-09"
+  # Corpus cap for duplicate retrieval.
+  max_corpus: 1000
+  # Known-answer tickets, KEY or KEY=label. A customer-linked control is
+  # refused rather than sampled.
+  controls:
+    - RHDHBUGS-1234=still-valid
+  # One KEY.json per ticket. Missing assessments become `unclear`
+  # (needs_repro), never a guessed disposition.
+  assessments: bug-assessments
+  # Where report.md, packets.json, summary.csv, manifest.json, and
+  # proposed/ land.
+  output_dir: bug-report
+  # Custom field ids that mark a ticket customer-linked, e.g.
+  # [customfield_10746]. Labels, RHDHSUPP/ACCOUNT links, and support keys
+  # in the text are always detected without this.
+  customer_field_ids: []
 
 # Empty: report-<timestamp>.json in the working directory.
 report_file: ""

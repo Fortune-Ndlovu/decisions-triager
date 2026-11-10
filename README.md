@@ -178,6 +178,64 @@ confusion matrices (with `<empty>`, `<invalid>`, `<classify-failed>`
 sentinels), the confidence distribution, and would-write counts.
 `--sample 100` replays only the first 100 rows.
 
+### Triage aged bugs
+
+```bash
+node src/index.ts --mode bugs
+```
+
+Bugs mode asks a different question from the other three: not "who owns
+this ticket", but "should this aged report stay open". It samples aged,
+non-customer bugs, ranks duplicate candidates against the whole corpus,
+grades the assessments you supply, and writes local artifacts.
+
+**It has no write path.** It never comments, transitions, links, or edits
+a field, and `dry_run` does not apply because there is nothing to turn
+off. Every close is a local proposal in `bug-report/proposed/`; approving
+one is a separate, gated step.
+
+The mode needs an assessment per ticket in `bugs.assessments`, one
+`KEY.json` each:
+
+```json
+{
+  "key": "RHDHBUGS-1234",
+  "disposition": "already_fixed",
+  "fix": { "pr": "https://github.com/acme/repo/pull/1", "release": "v0.11.0", "released": true },
+  "evidence": [
+    {
+      "type": "pr",
+      "ref": "https://github.com/acme/repo/pull/1",
+      "why": "patches the duplicate secret path",
+      "strength": "direct"
+    }
+  ],
+  "review": { "independentPasses": 2, "agree": true }
+}
+```
+
+The assessment supplies claims and citations, never a confidence number.
+The policy derives confidence from evidence strength and applies the
+close gates:
+
+- **duplicate** — an outward Jira Duplicate link, or a candidate score of
+  at least 0.85, plus a direct citation of the target. An inward "is
+  duplicated by" link means the _other_ ticket is the duplicate and caps
+  the pair below the floor.
+- **already_fixed** — a merged PR or commit, a named release that carries
+  it, and `released: true`.
+- **no_longer_valid** — direct code, documentation, reproduction, or
+  release-note evidence.
+- **all closes** — at least 0.80 confidence (0.85 for duplicate), two
+  agreeing independent passes, and a ticket that is neither
+  customer-linked nor already Done.
+
+A failed gate downgrades to `comment_only` or `needs_repro`; it never
+becomes a close. A missing assessment is `unclear`, not a guess.
+
+Run `--check` first: bugs mode skips the Team/component catalogs and the
+classifier block, so it validates with just `jira.server` and `jql.bugs`.
+
 ## Reference
 
 ### `config.yaml`
@@ -191,6 +249,7 @@ can never silently enable live writes. Required settings:
 | `jira.server`         | Exactly one `https` origin, e.g. `https://your-site.atlassian.net` — no port, path, query, fragment, or user info |
 | `jql.candidate`       | Search for tickets missing Team and/or component                                                                  |
 | `jql.audit`           | Search for tickets with Team and component both set                                                               |
+| `jql.bugs`            | Corpus for `bugs` mode: aged, non-customer bug reports (required only in `bugs` mode)                             |
 | `team_name_prefixes`  | Prefixes stripped from live Jira team names before catalog matching (case-insensitive), e.g. `["ACME "]`          |
 | `jira.team_field`     | Jira custom field id for Team (default `customfield_10001`)                                                       |
 | `classifier.backend`  | `llama` (System One on llama.cpp) or `openai` (Decisions API) — there is no default provider                      |
@@ -201,7 +260,7 @@ Optional settings:
 
 | Setting                            | Default                   | Purpose                                                |
 | ---------------------------------- | ------------------------- | ------------------------------------------------------ |
-| `mode`                             | `triage`                  | `triage` \| `audit` \| `eval`                          |
+| `mode`                             | `triage`                  | `triage` \| `audit` \| `eval` \| `bugs`                |
 | `classifier.timeout_seconds`       | `60`                      | Per-request timeout (>= 1)                             |
 | `confidence_threshold`             | `0.7`                     | Minimum confidence to write (inclusive), `[0, 1]`      |
 | `assignee_route`                   | `true`                    | Deterministic assignee→team pre-route                  |
@@ -212,9 +271,20 @@ Optional settings:
 | `audit.state_file`                 | `triager-state.json`      | Audit history (atomic JSON, cwd-relative)              |
 | `report_file`                      | `report-<timestamp>.json` | Per-run JSON artifact                                  |
 | `files.teams` / `files.components` | shipped files             | Catalog paths (package-relative when bare)             |
+| `bugs.current_release`             | `2.1.0`                   | Release a still-valid claim is checked against         |
+| `bugs.aged_days`                   | `90`                      | Minimum age in days for the aged sample                |
+| `bugs.sample_size`                 | `12`                      | Aged tickets in the sample                             |
+| `bugs.seed`                        | `18094`                   | Stable sample order seed                               |
+| `bugs.as_of`                       | today                     | `YYYY-MM-DD` reference date for age arithmetic         |
+| `bugs.max_corpus`                  | `1000`                    | Corpus cap for duplicate retrieval                     |
+| `bugs.controls`                    | `[]`                      | Known-answer tickets, `KEY` or `KEY=label`             |
+| `bugs.assessments`                 | `bug-assessments`         | Directory of `KEY.json` assessments                    |
+| `bugs.output_dir`                  | `bug-report`              | Local artifact directory                               |
+| `bugs.customer_field_ids`          | `[]`                      | Custom field ids that mark a ticket customer-linked    |
 
-Relative catalog paths resolve against the package directory, not the
-working directory.
+Relative catalog paths (`files.*`) resolve against the package
+directory. `bugs.assessments` and `bugs.output_dir` are runtime
+artifacts and stay cwd-relative.
 
 ### Secrets and environment
 

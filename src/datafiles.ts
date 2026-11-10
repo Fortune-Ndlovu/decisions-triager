@@ -3,7 +3,7 @@
 // validated against TypeBox schemas: malformed shapes fail startup with a
 // path-bearing message instead of being coerced.
 import { readFileSync } from "node:fs";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 import type { Config } from "./config.ts";
 import { TEAM_UUID_PATTERN } from "./normalize.ts";
