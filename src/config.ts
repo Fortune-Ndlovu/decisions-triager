@@ -97,6 +97,8 @@ const ConfigSchema = Type.Object(
           assessments: Type.Optional(Type.String()),
           output_dir: Type.Optional(Type.String()),
           customer_field_ids: Type.Optional(Type.Array(Type.String())),
+          candidate_search: Type.Optional(Type.Boolean()),
+          candidate_max_results: Type.Optional(Type.Number({ minimum: 1 })),
         },
         { additionalProperties: false },
       ),
@@ -143,6 +145,8 @@ interface YamlConfig {
     assessments?: unknown;
     output_dir?: unknown;
     customer_field_ids?: unknown;
+    candidate_search?: unknown;
+    candidate_max_results?: unknown;
   };
   report_file?: unknown;
   files?: { teams?: unknown; components?: unknown };
@@ -305,6 +309,10 @@ export interface Config {
   bugOutputDir: string;
   /** Bugs mode: custom field ids that mean customer. */
   bugCustomerFieldIds: string[];
+  /** Bugs mode: run the bounded per-ticket candidate search. */
+  bugCandidateSearch: boolean;
+  /** Bugs mode: max candidates fetched per sampled ticket. */
+  bugCandidateMaxResults: number;
 }
 
 export interface LoadConfigOptions {
@@ -391,6 +399,8 @@ export function loadConfig(env: Env = process.env, options: LoadConfigOptions = 
     bugAssessmentsDir: optionalString(file.bugs?.assessments, "bug-assessments"),
     bugOutputDir: optionalString(file.bugs?.output_dir, "bug-report"),
     bugCustomerFieldIds: stringList(file.bugs?.customer_field_ids),
+    bugCandidateSearch: optionalBoolean(file.bugs?.candidate_search, true),
+    bugCandidateMaxResults: optionalNumber(file.bugs?.candidate_max_results, 50),
   };
 
   // The openai backend cannot classify without a key: fail at load, with

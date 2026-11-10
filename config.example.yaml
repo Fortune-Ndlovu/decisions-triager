@@ -108,6 +108,12 @@ bugs:
   # [customfield_10746]. Labels, RHDHSUPP/ACCOUNT links, and support keys
   # in the text are always detected without this.
   customer_field_ids: []
+  # Per sampled ticket, run a bounded JQL search for duplicate candidates
+  # that the corpus cap could hide, including closed/older tickets. The
+  # corpus stays the aged-open sample pool.
+  candidate_search: true
+  # Max candidates fetched per sampled ticket (one page, Jira relevance).
+  candidate_max_results: 50
 
 # Empty: report-<timestamp>.json in the working directory.
 report_file: ""

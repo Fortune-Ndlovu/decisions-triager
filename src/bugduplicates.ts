@@ -9,6 +9,10 @@ import type { BugTicket } from "./bugmodel.ts";
 export const DUPLICATE_CLOSE_THRESHOLD = 0.85;
 export const DUPLICATE_HINT_THRESHOLD = 0.7;
 export const MIN_CANDIDATE_SCORE = 0.35;
+/** Candidates kept per ticket after merging every retrieval source. */
+export const CANDIDATE_LIMIT = 3;
+/** JQL terms used for the bounded per-ticket candidate search. */
+export const CANDIDATE_MAX_TERMS = 4;
 
 const STOPWORDS = new Set([
   "a",
@@ -386,7 +390,7 @@ export function scoreCandidate(query: BugTicket, candidate: BugTicket): Duplicat
 export function rankCandidates(
   query: BugTicket,
   corpus: readonly BugTicket[],
-  limit = 3,
+  limit = CANDIDATE_LIMIT,
   minScore = MIN_CANDIDATE_SCORE,
 ): DuplicateCandidate[] {
   const scored: DuplicateCandidate[] = [];
@@ -413,4 +417,73 @@ export function candidateThreshold(score: number): string {
     return "comment-only";
   }
   return "below-threshold";
+}
+
+/** A sanitized JQL word: lowercase alphanumerics only, no stopwords. */
+function jqlWord(raw: string): string {
+  const word = raw.toLowerCase().replaceAll(/[^a-z0-9]+/gu, "");
+  return word.length >= 3 && !STOPWORDS.has(word) ? word : "";
+}
+
+/**
+ * Terms for the bounded candidate search: sanitized words from the summary
+ * only.
+ *
+ * Tuned against redhat.atlassian.net: prose from the summary matched the
+ * real older duplicates, while error-signature terms either matched nothing
+ * or matched 50 unrelated tickets. Description text was not needed.
+ */
+export function candidateTerms(ticket: BugTicket, maxTerms = CANDIDATE_MAX_TERMS): string[] {
+  const terms: string[] = [];
+  for (const token of tokenize(ticket.summary)) {
+    const word = jqlWord(token);
+    if (word && !terms.includes(word)) {
+      terms.push(word);
+    }
+  }
+  return terms.slice(0, maxTerms);
+}
+
+/**
+ * Bounded per-ticket retrieval, scoped to the ticket's own project.
+ *
+ * The corpus cap and the corpus JQL cannot hide an older match because this
+ * query is independent of both; `created <=` the ticket's own date keeps it
+ * to plausible canonical reports. Ordering is Jira's default relevance:
+ * measured against real data, `ORDER BY created ASC` returned the 50 oldest
+ * matches and pushed the real duplicates out, while relevance found them.
+ */
+export function candidateJql(ticket: BugTicket, terms: readonly string[]): string {
+  const project = ticket.key.split("-")[0] ?? "";
+  const clauses = terms.map((term) => `summary ~ "${term}"`);
+  const parts: string[] = [];
+  if (project) {
+    parts.push(`project = ${project}`);
+  }
+  parts.push(`(${clauses.join(" OR ")})`, `key != ${ticket.key}`);
+  const created = /^\d{4}-\d{2}-\d{2}/u.exec(ticket.created)?.[0];
+  if (created !== undefined) {
+    parts.push(`created <= "${created} 23:59"`);
+  }
+  return parts.join(" AND ");
+}
+
+/** Merge candidate sets by key, keep the best score, and cap the list. */
+export function mergeCandidates(
+  groups: readonly (readonly DuplicateCandidate[])[],
+): DuplicateCandidate[] {
+  const best = new Map<string, DuplicateCandidate>();
+  for (const group of groups) {
+    for (const candidate of group) {
+      const existing = best.get(candidate.key);
+      if (existing === undefined || candidate.score > existing.score) {
+        best.set(candidate.key, candidate);
+      }
+    }
+  }
+  return [...best.values()]
+    .sort((left, right) =>
+      right.score === left.score ? left.key.localeCompare(right.key) : right.score - left.score,
+    )
+    .slice(0, CANDIDATE_LIMIT);
 }

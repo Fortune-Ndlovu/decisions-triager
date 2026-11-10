@@ -11,7 +11,13 @@ import {
   type CustomerFieldMap,
 } from "./bugmodel.ts";
 import { parseControls, selectSample, type Control } from "./bugselection.ts";
-import { rankCandidates, type DuplicateCandidate } from "./bugduplicates.ts";
+import {
+  candidateJql,
+  candidateTerms,
+  mergeCandidates,
+  rankCandidates,
+  type DuplicateCandidate,
+} from "./bugduplicates.ts";
 import { loadAssessments, type Assessment } from "./bugassessment.ts";
 import { evaluate, type Packet } from "./bugpolicy.ts";
 import {
@@ -78,6 +84,33 @@ function controlsOf(config: Config): Control[] {
   return parseControls(config.bugControls);
 }
 
+/**
+ * One bounded candidate page for a sampled ticket, scoped by the generated
+ * JQL. A malformed candidate is skipped, not fatal: retrieval is advisory and
+ * cannot authorize a close on its own.
+ */
+async function fetchCandidates(
+  client: JiraClient,
+  config: Config,
+  mapping: CustomerFieldMap,
+  jql: string,
+): Promise<BugTicket[]> {
+  const limit = config.bugCandidateMaxResults;
+  const page = await client.searchJql(jql, limit, bugSearchFields(config.teamField), undefined);
+  if (!isRecord(page) || !Array.isArray(page.issues) || typeof page.isLast !== "boolean") {
+    throw new IssueValidationError("unreadable candidate search response");
+  }
+  const tickets: BugTicket[] = [];
+  for (const issue of page.issues.slice(0, limit)) {
+    try {
+      tickets.push(normalizeBugIssue(issue, config.teamField, mapping));
+    } catch (error) {
+      log.warn(`skipping unreadable duplicate candidate: ${describeException(error)}`);
+    }
+  }
+  return tickets;
+}
+
 function asOfDate(config: Config): Date {
   const parsed = new Date(config.bugAsOf);
   return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
@@ -120,6 +153,25 @@ export async function runBugTriage(config: Config, deps: BugRunDeps = {}): Promi
       // Retrieval failure weakens evidence; it never authorizes a close.
       log.warn(`duplicate ranking failed for ${ticket.key}: ${describeException(error)}`);
     }
+
+    // The corpus is the sample pool (aged, open). A closed canonical ticket
+    // is often the real duplicate target, so search per ticket with a bounded
+    // query that is not limited by the corpus cap.
+    if (config.bugCandidateSearch) {
+      const terms = candidateTerms(ticket);
+      if (terms.length === 0) {
+        log.info(`no searchable terms for ${ticket.key}; using corpus candidates only`);
+      } else {
+        try {
+          const found = await fetchCandidates(client, config, mapping, candidateJql(ticket, terms));
+          candidates = mergeCandidates([candidates, rankCandidates(ticket, found)]);
+          log.info(`candidate search for ${ticket.key}: ${found.length} hit(s)`);
+        } catch (error) {
+          log.warn(`candidate search failed for ${ticket.key}: ${describeException(error)}`);
+        }
+      }
+    }
+
     const assessment: Assessment | undefined = assessments.get(ticket.key);
     if (assessment === undefined && assessments.size > 0) {
       log.info(`no assessment for ${ticket.key}: recording as unclear`);

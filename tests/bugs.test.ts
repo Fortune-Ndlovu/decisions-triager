@@ -6,8 +6,11 @@ import { loadConfig } from "../src/config.ts";
 import { ageDays, bugSearchFields, normalizeBugIssue, type BugTicket } from "../src/bugmodel.ts";
 import { exclusionReason, selectSample } from "../src/bugselection.ts";
 import {
+  candidateJql,
+  candidateTerms,
   DUPLICATE_CLOSE_THRESHOLD,
   linkRelationship,
+  mergeCandidates,
   rankCandidates,
   scoreCandidate,
 } from "../src/bugduplicates.ts";
@@ -306,6 +309,41 @@ describe("duplicate scoring", () => {
     const ranked = rankCandidates(query, corpus);
     expect(ranked[0]?.key).toBe("RHDHBUGS-2");
     expect(ranked.map((item) => item.key)).not.toContain("RHDHBUGS-1");
+  });
+
+  it("builds sanitized summary terms without stopwords or punctuation", () => {
+    const query = bug("RHDHBUGS-1", {
+      summary: "Catalog plugin fails to load secrets",
+      description: "Error: KubeSecretNotFound calling /api/v1/secrets returned HTTP 500",
+    });
+    const terms = candidateTerms(query);
+    expect(terms).toEqual(["catalog", "plugin", "fail", "load"]);
+    expect(terms).not.toContain("kubesecretnotfound");
+    expect(candidateTerms(query, 20).length).toBeLessThanOrEqual(6);
+    expect(candidateTerms(query, 20).every((term) => /^[a-z0-9]+$/u.test(term))).toBeTruthy();
+  });
+
+  it("scopes the candidate query to older issues in the project and excludes the ticket", () => {
+    const query = bug("RHDHBUGS-1", { created: "2024-05-06T00:00:00.000+0000" });
+    expect(candidateJql(query, ["catalog", "timeout"])).toBe(
+      'project = RHDHBUGS AND (summary ~ "catalog" OR summary ~ "timeout") AND key != RHDHBUGS-1 AND created <= "2024-05-06 23:59"',
+    );
+  });
+
+  it("omits the created bound when the ticket has no readable date", () => {
+    const query = bug("RHDHBUGS-1", { created: "" });
+    expect(candidateJql(query, ["catalog"])).toBe(
+      'project = RHDHBUGS AND (summary ~ "catalog") AND key != RHDHBUGS-1',
+    );
+  });
+
+  it("merges candidate sets, keeps the better score, and caps the list", () => {
+    const merged = mergeCandidates([
+      [candidate("A", 0.4), candidate("B", 0.5)],
+      [candidate("A", 0.6), candidate("C", 0.7), candidate("D", 0.8)],
+    ]);
+    expect(merged.map((item) => item.key)).toEqual(["D", "C", "A"]);
+    expect(merged.find((item) => item.key === "A")?.score).toBe(0.6);
   });
 });
 
@@ -674,5 +712,96 @@ describe("bugs mode end to end", () => {
         { yamlText: bugsPlusTriageJql, mode: "triage" },
       ),
     ).toThrow("classifier is required");
+  });
+
+  it("finds a closed canonical ticket outside the aged corpus", async () => {
+    const root = mkdtempSync(join(tmpdir(), "bugs-cand-"));
+    const config = loadConfig(
+      { JIRA_API_TOKEN: "a@b.test:token" },
+      {
+        yamlText: [
+          "mode: bugs",
+          "jira:",
+          "  server: https://example.atlassian.net",
+          "jql:",
+          "  bugs: project = RHDHBUGS",
+          "bugs:",
+          "  sample_size: 1",
+          '  as_of: "2026-11-09"',
+          "  candidate_max_results: 10",
+          `  assessments: ${join(root, "assessments")}`,
+          `  output_dir: ${join(root, "report")}`,
+        ].join("\n"),
+      },
+    );
+
+    const openTicket = issue("RHDHBUGS-10", {
+      summary: "Catalog plugin fails to load with KubeSecretNotFound",
+    });
+    const closedTicket = issue("RHDHBUGS-2", {
+      summary: "Catalog plugin fails to load with KubeSecretNotFound",
+      status: { name: "Closed", category: { name: "Done" } },
+    });
+
+    const jqls: string[] = [];
+    const client: JiraClient = {
+      searchJql: (jql) => {
+        jqls.push(jql);
+        const issues = jql.includes("key !=") ? [closedTicket] : [openTicket];
+        return Promise.resolve({ issues, isLast: true });
+      },
+      issue: () => Promise.resolve({}),
+      updateIssue: () => Promise.resolve(),
+      projectComponents: () => Promise.resolve([]),
+    };
+
+    const result = await runBugTriage(config, { jiraClient: client });
+    const bounded = jqls.find((jql) => jql.includes("key !="));
+    expect(bounded).toContain('summary ~ "catalog"');
+    expect(bounded).toContain('created <= "2025-01-01 23:59"');
+    expect(bounded).not.toContain("ORDER BY");
+    expect(result.packets[0]?.duplicateCandidates.map((item) => item.key)).toContain("RHDHBUGS-2");
+    // Retrieval alone never produces a close without an assessment.
+    expect(result.packets[0]?.action).toBe("needs_repro");
+  });
+
+  it("keeps corpus candidates when the bounded search fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "bugs-cand-fail-"));
+    const config = loadConfig(
+      { JIRA_API_TOKEN: "a@b.test:token" },
+      {
+        yamlText: [
+          "mode: bugs",
+          "jira:",
+          "  server: https://example.atlassian.net",
+          "jql:",
+          "  bugs: project = RHDHBUGS",
+          "bugs:",
+          "  sample_size: 1",
+          '  as_of: "2026-11-09"',
+          `  assessments: ${join(root, "assessments")}`,
+          `  output_dir: ${join(root, "report")}`,
+        ].join("\n"),
+      },
+    );
+
+    const corpus = [
+      issue("RHDHBUGS-10", { summary: "Catalog plugin fails to load with timeout" }),
+      issue("RHDHBUGS-11", { summary: "Catalog plugin fails to load with timeout" }),
+    ];
+    const client: JiraClient = {
+      searchJql: (jql) =>
+        jql.includes("key !=")
+          ? Promise.reject(new Error("candidate search unavailable"))
+          : Promise.resolve({ issues: corpus, isLast: true }),
+      issue: () => Promise.resolve({}),
+      updateIssue: () => Promise.resolve(),
+      projectComponents: () => Promise.resolve([]),
+    };
+
+    const result = await runBugTriage(config, { jiraClient: client });
+    const [packet] = result.packets;
+    expect(packet.duplicateCandidates.length).toBeGreaterThan(0);
+    expect(packet.duplicateCandidates.map((item) => item.key)).not.toContain(packet.key);
   });
 });

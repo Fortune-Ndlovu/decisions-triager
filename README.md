@@ -186,8 +186,18 @@ node src/index.ts --mode bugs
 
 Bugs mode asks a different question from the other three: not "who owns
 this ticket", but "should this aged report stay open". It samples aged,
-non-customer bugs, ranks duplicate candidates against the whole corpus,
-grades the assessments you supply, and writes local artifacts.
+non-customer bugs, ranks duplicate candidates, grades the assessments you
+supply, and writes local artifacts.
+
+Two retrievals feed the duplicate check. The corpus (`jql.bugs`) is the
+**aged, open sample pool** and is capped by `bugs.max_corpus`. Per sampled
+ticket, a second bounded query searches the same project for matches
+regardless of status or age, so a closed canonical ticket that the corpus
+cap would hide is still found. That query is `summary ~` on up to four
+sanitized summary words, restricted to `created <=` the ticket's own date
+and ordered by Jira relevance, limited by `bugs.candidate_max_results`.
+Retrieval never decides a duplicate by itself; the policy still requires a
+direct citation and the 0.85 floor.
 
 **It has no write path.** It never comments, transitions, links, or edits
 a field, and `dry_run` does not apply because there is nothing to turn
@@ -258,29 +268,31 @@ can never silently enable live writes. Required settings:
 
 Optional settings:
 
-| Setting                            | Default                   | Purpose                                                |
-| ---------------------------------- | ------------------------- | ------------------------------------------------------ |
-| `mode`                             | `triage`                  | `triage` \| `audit` \| `eval` \| `bugs`                |
-| `classifier.timeout_seconds`       | `60`                      | Per-request timeout (>= 1)                             |
-| `confidence_threshold`             | `0.7`                     | Minimum confidence to write (inclusive), `[0, 1]`      |
-| `assignee_route`                   | `true`                    | Deterministic assignee→team pre-route                  |
-| `dry_run`                          | `true`                    | `false` enables live Jira writes                       |
-| `max_tickets`                      | `100`                     | Candidate limit per run (>= 1)                         |
-| `description_max_chars`            | `48000`                   | Cap on the description sent to the classifier (>= 500) |
-| `audit.recheck_days`               | `30`                      | Dedup interval for re-audits (>= 0)                    |
-| `audit.state_file`                 | `triager-state.json`      | Audit history (atomic JSON, cwd-relative)              |
-| `report_file`                      | `report-<timestamp>.json` | Per-run JSON artifact                                  |
-| `files.teams` / `files.components` | shipped files             | Catalog paths (package-relative when bare)             |
-| `bugs.current_release`             | `2.1.0`                   | Release a still-valid claim is checked against         |
-| `bugs.aged_days`                   | `90`                      | Minimum age in days for the aged sample                |
-| `bugs.sample_size`                 | `12`                      | Aged tickets in the sample                             |
-| `bugs.seed`                        | `18094`                   | Stable sample order seed                               |
-| `bugs.as_of`                       | today                     | `YYYY-MM-DD` reference date for age arithmetic         |
-| `bugs.max_corpus`                  | `1000`                    | Corpus cap for duplicate retrieval                     |
-| `bugs.controls`                    | `[]`                      | Known-answer tickets, `KEY` or `KEY=label`             |
-| `bugs.assessments`                 | `bug-assessments`         | Directory of `KEY.json` assessments                    |
-| `bugs.output_dir`                  | `bug-report`              | Local artifact directory                               |
-| `bugs.customer_field_ids`          | `[]`                      | Custom field ids that mark a ticket customer-linked    |
+| Setting                            | Default                   | Purpose                                                 |
+| ---------------------------------- | ------------------------- | ------------------------------------------------------- |
+| `mode`                             | `triage`                  | `triage` \| `audit` \| `eval` \| `bugs`                 |
+| `classifier.timeout_seconds`       | `60`                      | Per-request timeout (>= 1)                              |
+| `confidence_threshold`             | `0.7`                     | Minimum confidence to write (inclusive), `[0, 1]`       |
+| `assignee_route`                   | `true`                    | Deterministic assignee→team pre-route                   |
+| `dry_run`                          | `true`                    | `false` enables live Jira writes                        |
+| `max_tickets`                      | `100`                     | Candidate limit per run (>= 1)                          |
+| `description_max_chars`            | `48000`                   | Cap on the description sent to the classifier (>= 500)  |
+| `audit.recheck_days`               | `30`                      | Dedup interval for re-audits (>= 0)                     |
+| `audit.state_file`                 | `triager-state.json`      | Audit history (atomic JSON, cwd-relative)               |
+| `report_file`                      | `report-<timestamp>.json` | Per-run JSON artifact                                   |
+| `files.teams` / `files.components` | shipped files             | Catalog paths (package-relative when bare)              |
+| `bugs.current_release`             | `2.1.0`                   | Release a still-valid claim is checked against          |
+| `bugs.aged_days`                   | `90`                      | Minimum age in days for the aged sample                 |
+| `bugs.sample_size`                 | `12`                      | Aged tickets in the sample                              |
+| `bugs.seed`                        | `18094`                   | Stable sample order seed                                |
+| `bugs.as_of`                       | today                     | `YYYY-MM-DD` reference date for age arithmetic          |
+| `bugs.max_corpus`                  | `1000`                    | Corpus cap for duplicate retrieval                      |
+| `bugs.controls`                    | `[]`                      | Known-answer tickets, `KEY` or `KEY=label`              |
+| `bugs.assessments`                 | `bug-assessments`         | Directory of `KEY.json` assessments                     |
+| `bugs.output_dir`                  | `bug-report`              | Local artifact directory                                |
+| `bugs.customer_field_ids`          | `[]`                      | Custom field ids that mark a ticket customer-linked     |
+| `bugs.candidate_search`            | `true`                    | Per-ticket search for older/closed duplicate candidates |
+| `bugs.candidate_max_results`       | `50`                      | Max candidates fetched per sampled ticket               |
 
 Relative catalog paths (`files.*`) resolve against the package
 directory. `bugs.assessments` and `bugs.output_dir` are runtime
