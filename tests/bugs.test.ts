@@ -598,4 +598,60 @@ describe("bugs mode end to end", () => {
       ),
     ).toThrow("classifier is required");
   });
+
+  it("validates the CLI mode, not the file mode", () => {
+    const triageYaml = [
+      "mode: triage",
+      "jira:",
+      "  server: https://example.atlassian.net",
+      "jql:",
+      "  candidate: project = PROJ",
+      "  audit: project = PROJ",
+      "classifier:",
+      "  backend: llama",
+      "  base_url: http://localhost:8080/v1",
+      "  model: test-model",
+    ].join("\n");
+
+    // The same file is valid as triage but invalid as bugs: --mode bugs
+    // must demand jql.bugs instead of silently searching an empty JQL.
+    expect(
+      loadConfig({ JIRA_API_TOKEN: "a@b.test:token" }, { yamlText: triageYaml, mode: "triage" })
+        .mode,
+    ).toBe("triage");
+    expect(() =>
+      loadConfig({ JIRA_API_TOKEN: "a@b.test:token" }, { yamlText: triageYaml, mode: "bugs" }),
+    ).toThrow("jql.bugs is required");
+
+    const bugsYaml = [
+      "mode: bugs",
+      "jira:",
+      "  server: https://example.atlassian.net",
+      "jql:",
+      "  bugs: project = RHDHBUGS",
+    ].join("\n");
+
+    // Conversely, a bugs file overridden to triage must demand a classifier,
+    // even though the file itself was allowed to omit one.
+    expect(
+      loadConfig({ JIRA_API_TOKEN: "a@b.test:token" }, { yamlText: bugsYaml, mode: "bugs" })
+        .bugsJql,
+    ).toBe("project = RHDHBUGS");
+
+    const bugsPlusTriageJql = [
+      "mode: bugs",
+      "jira:",
+      "  server: https://example.atlassian.net",
+      "jql:",
+      "  bugs: project = RHDHBUGS",
+      "  candidate: project = PROJ",
+      "  audit: project = PROJ",
+    ].join("\n");
+    expect(() =>
+      loadConfig(
+        { JIRA_API_TOKEN: "a@b.test:token" },
+        { yamlText: bugsPlusTriageJql, mode: "triage" },
+      ),
+    ).toThrow("classifier is required");
+  });
 });

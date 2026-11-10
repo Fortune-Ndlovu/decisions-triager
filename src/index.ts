@@ -62,13 +62,12 @@ function parseSample(raw: string | undefined): number | undefined {
 export async function main(): Promise<number> {
   let config: Config;
   try {
-    config = loadConfig();
-    if (mode !== undefined) {
-      if (!["triage", "audit", "eval", "bugs"].includes(mode)) {
-        throw new Error("--mode must be one of: triage, audit, eval, bugs");
-      }
-      config.mode = mode as Config["mode"];
+    if (mode !== undefined && !["triage", "audit", "eval", "bugs"].includes(mode)) {
+      throw new Error("--mode must be one of: triage, audit, eval, bugs");
     }
+    // Hand the CLI mode to loadConfig so mode-conditional validation
+    // (jql.bugs vs. classifier) sees the mode that will actually run.
+    config = loadConfig(process.env, { mode: mode as Config["mode"] | undefined });
     if (argv.flags.report !== undefined) {
       config.reportFile = argv.flags.report;
     }

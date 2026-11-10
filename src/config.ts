@@ -312,6 +312,8 @@ export interface LoadConfigOptions {
   yamlText?: string;
   /** Read this file instead of the shipped config.yaml. */
   yamlPath?: string;
+  /** Effective mode, when the CLI overrides the file. Validation must use it. */
+  mode?: Mode;
 }
 
 export function loadConfig(env: Env = process.env, options: LoadConfigOptions = {}): Config {
@@ -320,7 +322,10 @@ export function loadConfig(env: Env = process.env, options: LoadConfigOptions = 
     readFileSync(options.yamlPath ?? env.TRIAGER_CONFIG ?? join(BASE_DIR, "config.yaml"), "utf-8");
   const file = parseConfigYaml(yamlText);
 
-  const mode = (file.mode ?? "triage") as Mode;
+  // The CLI may override the file's mode before validation runs; use the
+  // effective mode so `--mode bugs` on a triage config still demands jql.bugs
+  // (and does not demand a classifier).
+  const mode = options.mode ?? ((file.mode ?? "triage") as Mode);
   const bugsMode = mode === "bugs";
 
   const jiraServer = requiredString(file.jira?.server, "jira.server");
