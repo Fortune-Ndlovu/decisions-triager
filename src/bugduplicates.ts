@@ -294,6 +294,13 @@ export interface DuplicateCandidate {
   reasons: string[];
 }
 
+/** True only when both timestamps parse and the candidate is strictly later. */
+function createdAfter(candidate: string, base: string): boolean {
+  const candidateTime = Date.parse(candidate);
+  const baseTime = Date.parse(base);
+  return Number.isFinite(candidateTime) && Number.isFinite(baseTime) && candidateTime > baseTime;
+}
+
 export function scoreCandidate(query: BugTicket, candidate: BugTicket): DuplicateCandidate {
   const querySummary = tokenize(query.summary);
   const candidateSummary = tokenize(candidate.summary);
@@ -374,6 +381,13 @@ export function scoreCandidate(query: BugTicket, candidate: BugTicket): Duplicat
   // be backwards, so this pair must never reach the close floor.
   if (reverseDuplicate) {
     score = Math.min(score, DUPLICATE_CLOSE_THRESHOLD - 0.01);
+  }
+  // Duplicate targets are the older reports. A newer candidate can still be a
+  // useful hint, but closing an aged ticket as a duplicate of a younger one
+  // usually closes the canonical report; keep that pair under the floor.
+  if (!reverseDuplicate && createdAfter(candidate.created, query.created)) {
+    score = Math.min(score, DUPLICATE_CLOSE_THRESHOLD - 0.01);
+    reasons.push("candidate is newer than this ticket");
   }
 
   return {

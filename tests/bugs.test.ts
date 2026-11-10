@@ -337,6 +337,26 @@ describe("duplicate scoring", () => {
     );
   });
 
+  it("keeps a newer candidate below the close floor", () => {
+    const query = bug("RHDHBUGS-1", {
+      summary: "Catalog plugin fails to load secrets",
+      created: "2024-01-01T00:00:00.000+0000",
+    });
+    const newer = bug("RHDHBUGS-2", {
+      summary: "Catalog plugin fails to load secrets",
+      created: "2025-06-01T00:00:00.000+0000",
+    });
+    const scored = scoreCandidate(query, newer);
+    expect(scored.score).toBeLessThan(DUPLICATE_CLOSE_THRESHOLD);
+    expect(scored.reasons).toContain("candidate is newer than this ticket");
+    // An older candidate with the same text still reaches the floor.
+    const older = bug("RHDHBUGS-3", {
+      summary: "Catalog plugin fails to load secrets",
+      created: "2023-01-01T00:00:00.000+0000",
+    });
+    expect(scoreCandidate(query, older).score).toBeGreaterThanOrEqual(DUPLICATE_CLOSE_THRESHOLD);
+  });
+
   it("merges candidate sets, keeps the better score, and caps the list", () => {
     const merged = mergeCandidates([
       [candidate("A", 0.4), candidate("B", 0.5)],
@@ -403,6 +423,31 @@ describe("disposition policy", () => {
 
     const unreleased = { ...fixed, fixReleased: false };
     expect(actionOf(evaluate(ticket, [], unreleased, "2.1.0"))).toBe("comment_only");
+  });
+
+  it("refuses a fix that only landed after the release under review", () => {
+    const fixed = assessment({
+      disposition: "already_fixed",
+      fixPr: "https://github.com/acme/repo/pull/1",
+      fixRelease: "2.3.0",
+      fixReleased: true,
+      evidence: [direct("pr", "https://github.com/acme/repo/pull/1")],
+    });
+    const packet = evaluate(ticket, [], fixed, "2.1.0");
+    expect(actionOf(packet)).toBe("comment_only");
+    expect(packet.gaps.join(" ")).toContain("newer than the release under review");
+
+    // Equal or older releases are fine: the fix is contained.
+    expect(actionOf(evaluate(ticket, [], { ...fixed, fixRelease: "2.1.0" }, "2.1.0"))).toBe(
+      "propose_close_fixed",
+    );
+    expect(actionOf(evaluate(ticket, [], { ...fixed, fixRelease: "1.9.2" }, "2.1.0"))).toBe(
+      "propose_close_fixed",
+    );
+    // Unparsable versions are not comparable, so this guard cannot reject them.
+    expect(actionOf(evaluate(ticket, [], { ...fixed, fixRelease: "nightly" }, "2.1.0"))).toBe(
+      "propose_close_fixed",
+    );
   });
 
   it("closes an obsolete ticket only on direct code/doc/repro evidence", () => {

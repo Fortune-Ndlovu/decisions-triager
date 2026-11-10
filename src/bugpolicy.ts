@@ -115,6 +115,37 @@ function reviewed(passes: number, agree: boolean): boolean {
   return passes >= 2 && agree;
 }
 
+/** Plain numeric release tuple, or null when the string is not a version. */
+function releaseTuple(raw: string): [number, number, number] | null {
+  const match = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/u.exec(raw.trim());
+  if (match === null) {
+    return null;
+  }
+  return [Number(match[1]), match[2] ? Number(match[2]) : 0, match[3] ? Number(match[3]) : 0];
+}
+
+/**
+ * True only when `release` parses and is strictly newer than `base`.
+ *
+ * Unparsable strings return false: this guard can only prove a fix is absent
+ * from the release under review, it cannot prove presence. Presence stays a
+ * supplied claim, which is why independent release verification is a separate
+ * step.
+ */
+function releaseAfter(release: string, base: string): boolean {
+  const left = releaseTuple(release);
+  const right = releaseTuple(base);
+  if (left === null || right === null) {
+    return false;
+  }
+  for (const index of [0, 1, 2] as const) {
+    if (left[index] !== right[index]) {
+      return left[index] > right[index];
+    }
+  }
+  return false;
+}
+
 interface GateResult {
   allowed: boolean;
   reasons: string[];
@@ -419,6 +450,14 @@ export function evaluate(
     if (!assessment.fixReleased) {
       gaps.push("fix is not confirmed released");
     }
+    // The release under review must contain the fix. A fix that only landed in
+    // a later release cannot close this ticket yet.
+    const fixAheadOfReview = releaseAfter(assessment.fixRelease, currentRelease);
+    if (fixAheadOfReview) {
+      gaps.push(
+        `fix release ${assessment.fixRelease} is newer than the release under review ${currentRelease}`,
+      );
+    }
     const gate = closeGate(
       ticket,
       confidence,
@@ -428,7 +467,11 @@ export function evaluate(
       assessment.agreement,
     );
     const allowed =
-      gate.allowed && artifact !== "" && assessment.fixReleased && assessment.fixRelease !== "";
+      gate.allowed &&
+      artifact !== "" &&
+      assessment.fixReleased &&
+      assessment.fixRelease !== "" &&
+      !fixAheadOfReview;
     if (allowed) {
       action = "propose_close_fixed";
       const releaseNote = assessment.fixRelease ? `, released in ${assessment.fixRelease}.` : ".";

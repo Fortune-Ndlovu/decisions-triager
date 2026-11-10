@@ -231,9 +231,12 @@ close gates:
 - **duplicate** — an outward Jira Duplicate link, or a candidate score of
   at least 0.85, plus a direct citation of the target. An inward "is
   duplicated by" link means the _other_ ticket is the duplicate and caps
-  the pair below the floor.
+  the pair below the floor. So does a candidate created after the ticket:
+  the older report is the canonical one, and a newer match is a hint only.
 - **already_fixed** — a merged PR or commit, a named release that carries
-  it, and `released: true`.
+  it, `released: true`, and a fix release no newer than the release under
+  review. Whether that release actually contains the commit is a supplied
+  claim; independent release verification is a separate step.
 - **no_longer_valid** — direct code, documentation, reproduction, or
   release-note evidence.
 - **all closes** — at least 0.80 confidence (0.85 for duplicate), two
