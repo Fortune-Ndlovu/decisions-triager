@@ -2,7 +2,7 @@
 // separate from normalize.ts/Ticket, which serves the Team/component modes:
 // this one needs links, comments, versions, age, and customer signals, and it
 // must not change the report or write contracts those modes depend on.
-import { descriptionText, isRecord } from "./normalize.ts";
+import { isRecord } from "./normalize.ts";
 
 export interface BugComment {
   author: string;
@@ -95,6 +95,11 @@ function asText(value: unknown): string {
   }
   if (typeof value === "string") {
     return value;
+  }
+  if (value instanceof Date) {
+    // jira.js turns date fields (created, updated, comment.created) into
+    // Date objects, not the ISO strings REST returns.
+    return Number.isNaN(value.getTime()) ? "" : value.toISOString();
   }
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);
@@ -330,7 +335,10 @@ export function normalizeBugIssue(
   }
 
   const summary = asText(firstValue(payload, "summary"));
-  const description = descriptionText(payload.description);
+  // Bug triage only needs text for lexical scoring, so use the tolerant
+  // flattener: an unknown ADF node weakens the evidence, it must not abort
+  // the corpus fetch the way the strict Team/component parser would.
+  const description = asText(payload.description);
   const searchText = [summary, description, ...comments.map((comment) => comment.body)].join("\n");
   const serialized = JSON.stringify(issue);
 

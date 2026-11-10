@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.ts";
-import { bugSearchFields, normalizeBugIssue, type BugTicket } from "../src/bugmodel.ts";
+import { ageDays, bugSearchFields, normalizeBugIssue, type BugTicket } from "../src/bugmodel.ts";
 import { exclusionReason, selectSample } from "../src/bugselection.ts";
 import {
   DUPLICATE_CLOSE_THRESHOLD,
@@ -140,6 +140,27 @@ describe("bug ticket normalization", () => {
 
   it("fails closed on a record with no key", () => {
     expect(() => normalizeBugIssue({ fields: {} }, TEAM_FIELD)).toThrow("issue has no key");
+  });
+
+  it("reads jira.js Date-valued timestamps", () => {
+    const ticket = bug("RHDHBUGS-1", { created: new Date("2024-01-01T00:00:00Z") });
+    expect(ticket.created).toBe("2024-01-01T00:00:00.000Z");
+    expect(ageDays(ticket.created, AS_OF)).toBe(1043);
+  });
+
+  it("flattens unknown ADF nodes instead of aborting the corpus fetch", () => {
+    const ticket = bug("RHDHBUGS-1", {
+      description: {
+        type: "doc",
+        version: 1,
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "catalog fails to load" }] },
+          { type: "newFancyNode", content: [{ type: "text", text: "timeout after 30s" }] },
+        ],
+      },
+    });
+    expect(ticket.description).toContain("catalog fails to load");
+    expect(ticket.description).toContain("timeout after 30s");
   });
 });
 
